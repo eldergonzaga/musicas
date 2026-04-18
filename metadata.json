@@ -1,0 +1,5 @@
+{
+  "name": "Drive Player",
+  "description": "A polished music player for your Google Drive files and folders.",
+  "requestFramePermissions": []
+}

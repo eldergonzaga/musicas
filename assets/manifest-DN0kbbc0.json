@@ -1,0 +1,23 @@
+{
+  "name": "Drive Player",
+  "short_name": "DrivePlayer",
+  "description": "Seu player de música do Google Drive",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0a0502",
+  "theme_color": "#ff4e00",
+  "icons": [
+    {
+      "src": "https://picsum.photos/seed/music/192/192",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "https://picsum.photos/seed/music/512/512",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
