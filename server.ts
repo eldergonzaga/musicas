@@ -197,43 +197,68 @@ app.get('/api/drive/cover/:fileId', async (req, res) => {
   }
 });
 
+// API Routes
+app.head('/api/drive/stream/:fileId', async (req, res) => {
+  const token = req.cookies.drive_token;
+  if (!token) return res.status(401).end();
+
+  try {
+    const drive = getDriveClient(token);
+    const metadata = await drive.files.get({
+      fileId: req.params.fileId,
+      fields: 'id, name, mimeType, size',
+      supportsAllDrives: true
+    });
+    
+    res.setHeader('Accept-Ranges', 'bytes');
+    res.setHeader('Content-Type', metadata.data.mimeType || 'audio/mpeg');
+    res.setHeader('Content-Length', metadata.data.size || '0');
+    res.status(200).end();
+  } catch (error) {
+    res.status(500).end();
+  }
+});
+
 app.get('/api/drive/stream/:fileId', async (req, res) => {
   const token = req.cookies.drive_token;
-  if (!token) return res.status(401).send('Not authenticated');
+  if (!token) {
+    console.error('[Stream] Missing auth cookie for mobile request');
+    return res.status(401).send('Authentication required');
+  }
 
   const fileId = req.params.fileId;
   const range = req.headers.range;
   
-  console.log(`[Stream] Requesting ${fileId}${range ? ` with range ${range}` : ''}`);
+  console.log(`[Stream] Mobile Request | Range: ${range || 'None'} | ID: ${fileId}`);
 
   try {
     const drive = getDriveClient(token);
 
-    // 1. Buscar Metadados primeiro para saber o nome e o tipo real do arquivo
-    console.log(`[Stream] Fetching metadata for ${fileId}`);
-    const metadataResponse = await drive.files.get({
+    // 1. Obter metadados primeiro (necessário para Content-Length total)
+    const meta = await drive.files.get({
       fileId,
-      fields: 'id, name, mimeType',
+      fields: 'id, name, mimeType, size',
       supportsAllDrives: true
     });
-    
-    const fileName = metadataResponse.data.name || '';
-    let mimeType = metadataResponse.data.mimeType || 'audio/mpeg';
 
-    // 2. Corrigir MIME Type para Dispositivos Móveis (crucial para iOS)
-    if (mimeType === 'application/octet-stream' || mimeType === 'binary/octet-stream' || !mimeType) {
-      const ext = path.extname(fileName).toLowerCase();
+    const totalSize = parseInt(meta.data.size || '0');
+    let mimeType = meta.data.mimeType || 'audio/mpeg';
+    
+    // Correção de MIME para Mobile
+    if (mimeType.includes('octet-stream')) {
+      const ext = path.extname(meta.data.name || '').toLowerCase();
       if (ext === '.mp3') mimeType = 'audio/mpeg';
       else if (ext === '.m4a') mimeType = 'audio/mp4';
       else if (ext === '.wav') mimeType = 'audio/wav';
-      else if (ext === '.ogg') mimeType = 'audio/ogg';
-      else if (ext === '.aac') mimeType = 'audio/aac';
-      else mimeType = 'audio/mpeg'; // Default fallback
     }
 
-    console.log(`[Stream] Real MIME detected: ${mimeType} for file: ${fileName}`);
+    // 2. Desabilitar Buffer do Nginx (Render/Cloud Run)
+    res.setHeader('X-Accel-Buffering', 'no');
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    res.setHeader('Accept-Ranges', 'bytes');
+    res.setHeader('Content-Type', mimeType);
 
-    // 3. Solicitar a mídia ao Google
+    // 3. Configurar a requisição para o Google
     const googleResponse = await drive.files.get(
       { fileId, alt: 'media', supportsAllDrives: true, acknowledgeAbuse: true },
       { 
@@ -242,48 +267,24 @@ app.get('/api/drive/stream/:fileId', async (req, res) => {
       }
     );
 
-    const gContentType = (googleResponse.headers['content-type'] || '').toLowerCase();
-    
-    // Se o Google devolver HTML, é sinal de erro ou aviso de vírus
-    if (gContentType.includes('text/html')) {
-       console.error(`[Stream Error] Google returned HTML for ${fileId}. Likely a virus scan warning.`);
-       return res.status(403).send('Arquivo muito grande ou protegido. O Google Drive exige confirmação manual para este download.');
-    }
-
-    // 4. Configurar Cabeçalhos Rigorosos para Mobile
-    res.setHeader('Accept-Ranges', 'bytes');
-    res.setHeader('Content-Type', mimeType);
-    res.setHeader('X-Content-Type-Options', 'nosniff');
-    res.setHeader('Cache-Control', 'public, max-age=3600'); // Cache moderado ajuda no streaming estável
-    
-    const headersToCopy = [
-      'content-length',
-      'content-range',
-      'last-modified',
-      'etag'
-    ];
-
-    Object.entries(googleResponse.headers).forEach(([key, value]) => {
-      const lowerKey = key.toLowerCase();
-      if (headersToCopy.includes(lowerKey)) {
-        res.setHeader(key, value as string);
-      }
-    });
-
-    // Importante: Remover o header de transferência em pedaços se houver content-length definido
-    if (googleResponse.headers['content-length']) {
-      res.removeHeader('Transfer-Encoding');
-    }
-
+    // 4. Repassar Status e Headers de Range
     res.status(googleResponse.status);
-    console.log(`[Stream] Handshaking with mobile: ${googleResponse.status} | Bytes: ${googleResponse.headers['content-length']}`);
+    
+    if (googleResponse.headers['content-range']) {
+      res.setHeader('Content-Range', googleResponse.headers['content-range']);
+    }
+    if (googleResponse.headers['content-length']) {
+      res.setHeader('Content-Length', googleResponse.headers['content-length']);
+    }
 
-    // 5. Transmitir os dados e gerenciar erros de stream
+    console.log(`[Stream] Proxying Google: ${googleResponse.status} | Range: ${res.getHeader('Content-Range')}`);
+
+    // 5. Pipe do stream
     googleResponse.data.pipe(res);
 
     googleResponse.data.on('error', (err) => {
-      console.error(`[Stream Data Error] ${fileId}:`, err.message);
-      if (!res.headersSent) res.status(500).end();
+      console.error(`[Stream Error] Data flow broken for ${fileId}:`, err.message);
+      res.end();
     });
 
     req.on('close', () => {
@@ -291,10 +292,12 @@ app.get('/api/drive/stream/:fileId', async (req, res) => {
     });
 
   } catch (error: any) {
-    console.error(`[Stream Catch Error] ${fileId}:`, error.message);
+    console.error(`[Stream Error] Global catch for ${fileId}:`, error.message);
     if (!res.headersSent) {
-      const status = error.response?.status || 500;
-      res.status(status).send(error.message || 'Falha ao buscar áudio no Drive.');
+      if (error.response?.status === 403) {
+        return res.status(403).send('Google Drive bloqueou o streaming direto (confirmacao necessaria).');
+      }
+      res.status(500).send('Erro interno no servidor de áudio.');
     }
   }
 });
