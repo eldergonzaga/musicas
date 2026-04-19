@@ -203,7 +203,12 @@ app.head('/api/drive/stream/:fileId', async (req, res) => {
   if (!tokenStr) return res.status(401).end();
 
   try {
-    const drive = getDriveClient(tokenStr);
+    const tokens = JSON.parse(tokenStr);
+    const drive = google.drive({ 
+      version: 'v3', 
+      auth: new google.auth.OAuth2(process.env.GOOGLE_CLIENT_ID, process.env.GOOGLE_CLIENT_SECRET).setCredentials(tokens) as any
+    });
+
     const meta = await drive.files.get({
       fileId: req.params.fileId,
       fields: 'name, mimeType, size',
@@ -211,12 +216,12 @@ app.head('/api/drive/stream/:fileId', async (req, res) => {
     });
 
     let mimeType = meta.data.mimeType || 'audio/mpeg';
-    if (mimeType === 'audio/mp3') mimeType = 'audio/mpeg';
     if (mimeType.includes('octet-stream') || mimeType === 'application/x-goog-drive-file') {
       const ext = path.extname(meta.data.name || '').toLowerCase();
       if (ext === '.mp3') mimeType = 'audio/mpeg';
+      else if (ext === '.m4a') mimeType = 'audio/mp4';
     }
-    
+
     res.setHeader('Accept-Ranges', 'bytes');
     res.setHeader('Content-Type', mimeType);
     res.setHeader('Content-Length', meta.data.size || '0');
@@ -235,36 +240,26 @@ app.get('/api/drive/stream/:fileId', async (req, res) => {
   
   try {
     let tokens = JSON.parse(tokenStr);
-    const client = new google.auth.OAuth2(
+    const oauth2Client = new google.auth.OAuth2(
       process.env.GOOGLE_CLIENT_ID,
       process.env.GOOGLE_CLIENT_SECRET,
       REDIRECT_URI
     );
-    client.setCredentials(tokens);
+    oauth2Client.setCredentials(tokens);
 
-    // Refresh token if expired or close to expire (within 5 mins)
-    const isExpired = tokens.expiry_date && (tokens.expiry_date - 300000) <= Date.now();
-    if (isExpired && tokens.refresh_token) {
-      console.log('[Auth] Token expiring soon, refreshing...');
+    // Refresh se necessário
+    if (tokens.expiry_date && (tokens.expiry_date - 300000) <= Date.now() && tokens.refresh_token) {
       try {
-        const { tokens: newTokens } = await client.refreshAccessToken();
+        const { tokens: newTokens } = await oauth2Client.refreshAccessToken();
         tokens = { ...tokens, ...newTokens };
         res.cookie('drive_token', JSON.stringify(tokens), {
-          httpOnly: true,
-          secure: true,
-          sameSite: 'none',
-          maxAge: 30 * 24 * 60 * 60 * 1000,
+          httpOnly: true, secure: true, sameSite: 'none', maxAge: 30 * 24 * 60 * 60 * 1000
         });
-        client.setCredentials(tokens);
-      } catch (refreshErr) {
-        console.error('[Auth] Refresh failed:', refreshErr);
-        // Continue with old token, if it fails next, user will have to re-login
-      }
+      } catch (err) { console.error('[Auth] Refresh failed'); }
     }
 
-    const drive = google.drive({ version: 'v3', auth: client });
-    
-    // 1. Obter metadados
+    // Buscar metadados para garantir o Content-Type correto
+    const drive = google.drive({ version: 'v3', auth: oauth2Client });
     const meta = await drive.files.get({
       fileId,
       fields: 'name, mimeType, size',
@@ -272,44 +267,49 @@ app.get('/api/drive/stream/:fileId', async (req, res) => {
     });
 
     let mimeType = meta.data.mimeType || 'audio/mpeg';
-    // Normalização agressiva para Mobile
-    if (mimeType === 'audio/mp3') mimeType = 'audio/mpeg';
     if (mimeType.includes('octet-stream') || mimeType === 'application/x-goog-drive-file') {
       const ext = path.extname(meta.data.name || '').toLowerCase();
       if (ext === '.mp3') mimeType = 'audio/mpeg';
       else if (ext === '.m4a') mimeType = 'audio/mp4';
-      else if (ext === '.wav') mimeType = 'audio/wav';
     }
 
-    // 2. Solicitar ao Google
-    const googleResponse = await drive.files.get(
-      { fileId, alt: 'media', supportsAllDrives: true, acknowledgeAbuse: true },
-      { 
-        responseType: 'stream',
-        headers: range ? { Range: range } : {} 
-      }
-    );
+    // Requisição direta via axios para melhor suporte a streams grandes e Range
+    const downloadUrl = `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media&acknowledgeAbuse=true&supportsAllDrives=true`;
+    
+    const googleResponse = await axios({
+      method: 'get',
+      url: downloadUrl,
+      headers: {
+        'Authorization': `Bearer ${tokens.access_token}`,
+        ...(range ? { 'Range': range } : {})
+      },
+      responseType: 'stream',
+      validateStatus: (status) => status === 200 || status === 206
+    });
 
-    // 3. Repassar Headers Estruturados para Mobile
+    // Headers fundamentais para Streaming Mobile de arquivos longos
     res.setHeader('Accept-Ranges', 'bytes');
     res.setHeader('Content-Type', mimeType);
     res.setHeader('Content-Disposition', 'inline');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('X-Accel-Buffering', 'no');
     res.setHeader('Cache-Control', 'public, max-age=3600');
-    
+
     if (googleResponse.headers['content-range']) {
       res.setHeader('Content-Range', googleResponse.headers['content-range']);
     }
-    if (googleResponse.headers['content-length']) {
-      res.setHeader('Content-Length', googleResponse.headers['content-length']);
+    
+    // Se não houver range, enviamos o tamanho total do arquivo
+    const contentLength = googleResponse.headers['content-length'] || meta.data.size;
+    if (contentLength) {
+      res.setHeader('Content-Length', contentLength);
     }
 
-    // Status deve ser 200 ou 206
     res.status(googleResponse.status);
     googleResponse.data.pipe(res);
 
     googleResponse.data.on('error', (err: any) => {
-      console.error('[Stream Data Error]', err.message);
+      console.error('[Stream Error]', err.message);
       if (!res.headersSent) res.status(500).end();
     });
 
@@ -318,10 +318,9 @@ app.get('/api/drive/stream/:fileId', async (req, res) => {
     });
 
   } catch (error: any) {
-    console.error(`[Stream Catch Error] ${fileId}:`, error.message);
+    console.error(`[Stream Error]`, error.message);
     if (!res.headersSent) {
-      const status = error.response?.status || 500;
-      res.status(status).send(status === 401 ? 'Unauthorized (Google)' : 'Streaming failed');
+      res.status(error.response?.status || 500).send('Streaming failed');
     }
   }
 });
