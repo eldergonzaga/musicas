@@ -203,11 +203,13 @@ app.get('/api/drive/stream/:fileId', async (req, res) => {
 
   const fileId = req.params.fileId;
   const range = req.headers.range;
+  
+  console.log(`[Stream] Requesting ${fileId}${range ? ` with range ${range}` : ''}`);
 
   try {
     const drive = getDriveClient(token);
     
-    // Configurar a requisição de mídia usando o cliente oficial
+    // Configurar a requisição de mídia
     const googleResponse = await drive.files.get(
       { fileId, alt: 'media', supportsAllDrives: true, acknowledgeAbuse: true },
       { 
@@ -216,10 +218,10 @@ app.get('/api/drive/stream/:fileId', async (req, res) => {
       }
     );
 
-    // 3. Repassar os cabeçalhos de áudio do Google para o navegador
+    console.log(`[Stream] Google response: ${googleResponse.status} for ${fileId}`);
+
+    // Set headers
     res.status(googleResponse.status);
-    
-    // Garantir que o navegador saiba que suportamos ranges
     res.setHeader('Accept-Ranges', 'bytes');
     
     const headersToCopy = [
@@ -230,32 +232,39 @@ app.get('/api/drive/stream/:fileId', async (req, res) => {
     ];
 
     Object.entries(googleResponse.headers).forEach(([key, value]) => {
-      if (headersToCopy.includes(key.toLowerCase())) {
+      const lowerKey = key.toLowerCase();
+      if (headersToCopy.includes(lowerKey)) {
         res.setHeader(key, value as string);
+        console.log(`[Stream] Header: ${key} = ${value}`);
       }
     });
 
-    // Garantir que o navegador saiba que é um áudio
-    const mimeType = googleResponse.headers['content-type'] || 'audio/mpeg';
-    res.setHeader('Content-Type', mimeType);
+    // Ensure content-type
+    if (!res.getHeader('Content-Type')) {
+      res.setHeader('Content-Type', 'audio/mpeg');
+    }
 
-    // 4. Transmitir os dados (Pipe)
+    // Pipe the data
     googleResponse.data.pipe(res);
 
-    // Fechar o stream se o usuário fechar a aba ou parar a música
+    googleResponse.data.on('error', (err) => {
+      console.error(`[Stream Error] Data branch for ${fileId}:`, err);
+      if (!res.headersSent) {
+        res.status(500).send('Stream error');
+      }
+      res.end();
+    });
+
     req.on('close', () => {
+      console.log(`[Stream] Request closed by client for ${fileId}`);
       if (googleResponse.data.destroy) googleResponse.data.destroy();
     });
 
   } catch (error: any) {
-    console.error('[Stream Critical Error]:', error.message);
-    // Se o erro for "Not Found" ou "Forbidden", avisar o console
-    if (error.response) {
-      console.error('[Google Response Error]:', error.response.status, error.response.data);
-    }
-    
+    console.error(`[Stream Catch Error] ${fileId}:`, error.message);
     if (!res.headersSent) {
-      res.status(500).send('Streaming failed');
+      const status = error.response?.status || 500;
+      res.status(status).send(error.message || 'Stream fetch failed');
     }
   }
 });
