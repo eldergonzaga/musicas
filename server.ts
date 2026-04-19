@@ -228,15 +228,23 @@ app.get('/api/drive/stream/:fileId', async (req, res) => {
 
     console.log(`[Stream] Status: ${googleResponse.status} | MIME: ${gContentType}`);
 
-    // Set headers
-    res.status(googleResponse.status);
+    // Set headers antes do status para garantir
     res.setHeader('Accept-Ranges', 'bytes');
-    res.setHeader('X-Content-Type-Options', 'nosniff'); // Importante para navegadores móveis não "adivinharem" errado
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
     
+    // Forçar MIME de áudio se for genérico (muito comum no Drive vir como octet-stream)
+    let contentType = gContentType;
+    if (!gContentType || gContentType.includes('octet-stream')) {
+        contentType = 'audio/mpeg';
+    }
+    res.setHeader('Content-Type', contentType);
+
     const headersToCopy = [
       'content-length',
       'content-range',
-      'cache-control',
       'last-modified'
     ];
 
@@ -247,12 +255,8 @@ app.get('/api/drive/stream/:fileId', async (req, res) => {
       }
     });
 
-    // Forçar MIME de áudio se for genérico (muito comum no Drive vir como octet-stream)
-    if (!gContentType || gContentType === 'application/octet-stream' || gContentType === 'binary/octet-stream') {
-        res.setHeader('Content-Type', 'audio/mpeg');
-    } else {
-        res.setHeader('Content-Type', gContentType);
-    }
+    // Enviar o status (200 ou 206)
+    res.status(googleResponse.status);
 
     // Pipe the data
     googleResponse.data.pipe(res);
