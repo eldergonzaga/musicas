@@ -250,8 +250,8 @@ app.get('/api/drive/stream/:fileId', async (req, res) => {
     // Refresh se necessário
     if (tokens.expiry_date && (tokens.expiry_date - 300000) <= Date.now() && tokens.refresh_token) {
       try {
-        const { tokens: newTokens } = await oauth2Client.refreshAccessToken();
-        tokens = { ...tokens, ...newTokens };
+        const { credentials } = await oauth2Client.refreshAccessToken();
+        tokens = { ...tokens, ...credentials };
         res.cookie('drive_token', JSON.stringify(tokens), {
           httpOnly: true, secure: true, sameSite: 'none', maxAge: 30 * 24 * 60 * 60 * 1000
         });
