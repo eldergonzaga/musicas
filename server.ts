@@ -197,6 +197,19 @@ app.get('/api/drive/cover/:fileId', async (req, res) => {
   }
 });
 
+app.get(['/icon.png', '/favicon.ico'], async (req, res) => {
+  try {
+    const response = await axios.get('https://storage.googleapis.com/test-media-agent/5aa283ce-219d-4357-9d43-26c7ade98679.png', {
+      responseType: 'stream'
+    });
+    res.setHeader('Content-Type', 'image/png');
+    res.setHeader('Cache-Control', 'public, max-age=604800');
+    response.data.pipe(res);
+  } catch (error) {
+    res.status(404).end();
+  }
+});
+
 // API Routes
 app.head('/api/drive/stream/:fileId', async (req, res) => {
   const tokenStr = req.cookies.drive_token;
