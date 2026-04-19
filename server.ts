@@ -210,6 +210,18 @@ app.get(['/icon.png', '/favicon.ico'], async (req, res) => {
   }
 });
 
+app.get('/manifest.json', (req, res) => {
+  res.sendFile(path.join(process.cwd(), 'manifest.json'), {
+    headers: { 'Content-Type': 'application/manifest+json' }
+  });
+});
+
+app.get('/sw.js', (req, res) => {
+  res.sendFile(path.join(process.cwd(), 'sw.js'), {
+    headers: { 'Content-Type': 'application/javascript', 'Service-Worker-Allowed': '/' }
+  });
+});
+
 // API Routes
 app.head('/api/drive/stream/:fileId', async (req, res) => {
   const tokenStr = req.cookies.drive_token;
