@@ -218,45 +218,51 @@ app.get('/api/drive/stream/:fileId', async (req, res) => {
       }
     );
 
-    console.log(`[Stream] Google response: ${googleResponse.status} for ${fileId}`);
+    const gContentType = (googleResponse.headers['content-type'] || '').toLowerCase();
+    
+    // Se o Google devolver HTML, é sinal de erro ou tela de aviso de download (vírus scan)
+    if (gContentType.includes('text/html')) {
+       console.error(`[Stream Error] Google returned HTML for ${fileId}. Likely a download confirmation page.`);
+       return res.status(403).send('Google Drive prevented direct streaming for this file (requires confirmation).');
+    }
+
+    console.log(`[Stream] Status: ${googleResponse.status} | MIME: ${gContentType}`);
 
     // Set headers
     res.status(googleResponse.status);
     res.setHeader('Accept-Ranges', 'bytes');
+    res.setHeader('X-Content-Type-Options', 'nosniff'); // Importante para navegadores móveis não "adivinharem" errado
     
     const headersToCopy = [
-      'content-type',
       'content-length',
       'content-range',
-      'cache-control'
+      'cache-control',
+      'last-modified'
     ];
 
     Object.entries(googleResponse.headers).forEach(([key, value]) => {
       const lowerKey = key.toLowerCase();
       if (headersToCopy.includes(lowerKey)) {
         res.setHeader(key, value as string);
-        console.log(`[Stream] Header: ${key} = ${value}`);
       }
     });
 
-    // Ensure content-type
-    if (!res.getHeader('Content-Type')) {
-      res.setHeader('Content-Type', 'audio/mpeg');
+    // Forçar MIME de áudio se for genérico (muito comum no Drive vir como octet-stream)
+    if (!gContentType || gContentType === 'application/octet-stream' || gContentType === 'binary/octet-stream') {
+        res.setHeader('Content-Type', 'audio/mpeg');
+    } else {
+        res.setHeader('Content-Type', gContentType);
     }
 
     // Pipe the data
     googleResponse.data.pipe(res);
 
     googleResponse.data.on('error', (err) => {
-      console.error(`[Stream Error] Data branch for ${fileId}:`, err);
-      if (!res.headersSent) {
-        res.status(500).send('Stream error');
-      }
-      res.end();
+      console.error(`[Stream Error] ${fileId}:`, err.message);
+      if (!res.headersSent) res.status(500).end();
     });
 
     req.on('close', () => {
-      console.log(`[Stream] Request closed by client for ${fileId}`);
       if (googleResponse.data.destroy) googleResponse.data.destroy();
     });
 
