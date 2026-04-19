@@ -206,12 +206,19 @@ app.head('/api/drive/stream/:fileId', async (req, res) => {
     const drive = getDriveClient(tokenStr);
     const meta = await drive.files.get({
       fileId: req.params.fileId,
-      fields: 'mimeType, size',
+      fields: 'name, mimeType, size',
       supportsAllDrives: true
     });
+
+    let mimeType = meta.data.mimeType || 'audio/mpeg';
+    if (mimeType === 'audio/mp3') mimeType = 'audio/mpeg';
+    if (mimeType.includes('octet-stream') || mimeType === 'application/x-goog-drive-file') {
+      const ext = path.extname(meta.data.name || '').toLowerCase();
+      if (ext === '.mp3') mimeType = 'audio/mpeg';
+    }
     
     res.setHeader('Accept-Ranges', 'bytes');
-    res.setHeader('Content-Type', meta.data.mimeType || 'audio/mpeg');
+    res.setHeader('Content-Type', mimeType);
     res.setHeader('Content-Length', meta.data.size || '0');
     res.status(200).end();
   } catch (error) {
@@ -265,7 +272,9 @@ app.get('/api/drive/stream/:fileId', async (req, res) => {
     });
 
     let mimeType = meta.data.mimeType || 'audio/mpeg';
-    if (mimeType.includes('octet-stream')) {
+    // Normalização agressiva para Mobile
+    if (mimeType === 'audio/mp3') mimeType = 'audio/mpeg';
+    if (mimeType.includes('octet-stream') || mimeType === 'application/x-goog-drive-file') {
       const ext = path.extname(meta.data.name || '').toLowerCase();
       if (ext === '.mp3') mimeType = 'audio/mpeg';
       else if (ext === '.m4a') mimeType = 'audio/mp4';
@@ -281,12 +290,12 @@ app.get('/api/drive/stream/:fileId', async (req, res) => {
       }
     );
 
-    // 3. Repassar Headers Estruturados
+    // 3. Repassar Headers Estruturados para Mobile
     res.setHeader('Accept-Ranges', 'bytes');
     res.setHeader('Content-Type', mimeType);
-    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Content-Disposition', 'inline');
     res.setHeader('X-Accel-Buffering', 'no');
-    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Cache-Control', 'public, max-age=3600');
     
     if (googleResponse.headers['content-range']) {
       res.setHeader('Content-Range', googleResponse.headers['content-range']);
@@ -295,6 +304,7 @@ app.get('/api/drive/stream/:fileId', async (req, res) => {
       res.setHeader('Content-Length', googleResponse.headers['content-length']);
     }
 
+    // Status deve ser 200 ou 206
     res.status(googleResponse.status);
     googleResponse.data.pipe(res);
 
