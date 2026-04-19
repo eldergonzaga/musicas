@@ -227,10 +227,37 @@ app.get('/api/drive/stream/:fileId', async (req, res) => {
   const range = req.headers.range;
   
   try {
-    const tokens = JSON.parse(tokenStr);
-    const drive = getDriveClient(tokenStr);
+    let tokens = JSON.parse(tokenStr);
+    const client = new google.auth.OAuth2(
+      process.env.GOOGLE_CLIENT_ID,
+      process.env.GOOGLE_CLIENT_SECRET,
+      REDIRECT_URI
+    );
+    client.setCredentials(tokens);
+
+    // Refresh token if expired or close to expire (within 5 mins)
+    const isExpired = tokens.expiry_date && (tokens.expiry_date - 300000) <= Date.now();
+    if (isExpired && tokens.refresh_token) {
+      console.log('[Auth] Token expiring soon, refreshing...');
+      try {
+        const { tokens: newTokens } = await client.refreshAccessToken();
+        tokens = { ...tokens, ...newTokens };
+        res.cookie('drive_token', JSON.stringify(tokens), {
+          httpOnly: true,
+          secure: true,
+          sameSite: 'none',
+          maxAge: 30 * 24 * 60 * 60 * 1000,
+        });
+        client.setCredentials(tokens);
+      } catch (refreshErr) {
+        console.error('[Auth] Refresh failed:', refreshErr);
+        // Continue with old token, if it fails next, user will have to re-login
+      }
+    }
+
+    const drive = google.drive({ version: 'v3', auth: client });
     
-    // 1. Obter metadados para garantir o tipo e o tamanho
+    // 1. Obter metadados
     const meta = await drive.files.get({
       fileId,
       fields: 'name, mimeType, size',
@@ -245,26 +272,16 @@ app.get('/api/drive/stream/:fileId', async (req, res) => {
       else if (ext === '.wav') mimeType = 'audio/wav';
     }
 
-    // 2. Preparar headers para o Google
-    const headers: Record<string, string> = {
-      'Authorization': `Bearer ${tokens.access_token}`
-    };
-    if (range) {
-      headers['Range'] = range;
-    }
+    // 2. Solicitar ao Google
+    const googleResponse = await drive.files.get(
+      { fileId, alt: 'media', supportsAllDrives: true, acknowledgeAbuse: true },
+      { 
+        responseType: 'stream',
+        headers: range ? { Range: range } : {} 
+      }
+    );
 
-    // 3. Solicitar ao Google usando axios para controle total sobre streams
-    const downloadUrl = `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media&acknowledgeAbuse=true`;
-    
-    const googleResponse = await axios({
-      method: 'get',
-      url: downloadUrl,
-      headers,
-      responseType: 'stream',
-      validateStatus: (status) => status === 200 || status === 206
-    });
-
-    // 4. Repassar Headers Estruturados para Mobile
+    // 3. Repassar Headers Estruturados
     res.setHeader('Accept-Ranges', 'bytes');
     res.setHeader('Content-Type', mimeType);
     res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -278,10 +295,7 @@ app.get('/api/drive/stream/:fileId', async (req, res) => {
       res.setHeader('Content-Length', googleResponse.headers['content-length']);
     }
 
-    // Importante para iOS: O status deve bater com a resposta do Google (200 ou 206)
     res.status(googleResponse.status);
-    
-    // Pipe os dados
     googleResponse.data.pipe(res);
 
     googleResponse.data.on('error', (err: any) => {
@@ -297,7 +311,7 @@ app.get('/api/drive/stream/:fileId', async (req, res) => {
     console.error(`[Stream Catch Error] ${fileId}:`, error.message);
     if (!res.headersSent) {
       const status = error.response?.status || 500;
-      res.status(status).send('Streaming failed');
+      res.status(status).send(status === 401 ? 'Unauthorized (Google)' : 'Streaming failed');
     }
   }
 });
