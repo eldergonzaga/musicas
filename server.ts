@@ -241,10 +241,18 @@ app.head('/api/drive/stream/:fileId', async (req, res) => {
     });
 
     let mimeType = meta.data.mimeType || 'audio/mpeg';
-    if (mimeType.includes('octet-stream') || mimeType === 'application/x-goog-drive-file') {
+    if (mimeType.includes('octet-stream') || mimeType === 'application/x-goog-drive-file' || mimeType.includes('application/octet-stream')) {
       const ext = path.extname(meta.data.name || '').toLowerCase();
-      if (ext === '.mp3') mimeType = 'audio/mpeg';
-      else if (ext === '.m4a') mimeType = 'audio/mp4';
+      const mimeMap: Record<string, string> = {
+        '.mp3': 'audio/mpeg',
+        '.m4a': 'audio/mp4',
+        '.wav': 'audio/wav',
+        '.ogg': 'audio/ogg',
+        '.flac': 'audio/flac',
+        '.aac': 'audio/aac',
+        '.opus': 'audio/ogg'
+      };
+      if (mimeMap[ext]) mimeType = mimeMap[ext];
     }
 
     res.setHeader('Accept-Ranges', 'bytes');
@@ -291,11 +299,19 @@ app.get('/api/drive/stream/:fileId', async (req, res) => {
       supportsAllDrives: true
     });
 
-    let mimeType = meta.data.mimeType || 'audio/mpeg';
-    if (mimeType.includes('octet-stream') || mimeType === 'application/x-goog-drive-file') {
+    let mimeTypeForGet = meta.data.mimeType || 'audio/mpeg';
+    if (mimeTypeForGet.includes('octet-stream') || mimeTypeForGet === 'application/x-goog-drive-file' || mimeTypeForGet.includes('application/octet-stream')) {
       const ext = path.extname(meta.data.name || '').toLowerCase();
-      if (ext === '.mp3') mimeType = 'audio/mpeg';
-      else if (ext === '.m4a') mimeType = 'audio/mp4';
+      const mimeMap: Record<string, string> = {
+        '.mp3': 'audio/mpeg',
+        '.m4a': 'audio/mp4',
+        '.wav': 'audio/wav',
+        '.ogg': 'audio/ogg',
+        '.flac': 'audio/flac',
+        '.aac': 'audio/aac',
+        '.opus': 'audio/ogg'
+      };
+      if (mimeMap[ext]) mimeTypeForGet = mimeMap[ext];
     }
 
     // Requisição direta via axios para melhor suporte a streams grandes e Range
@@ -314,9 +330,8 @@ app.get('/api/drive/stream/:fileId', async (req, res) => {
 
     // Headers fundamentais para Streaming Mobile de arquivos longos
     res.setHeader('Accept-Ranges', 'bytes');
-    res.setHeader('Content-Type', mimeType);
+    res.setHeader('Content-Type', mimeTypeForGet);
     res.setHeader('Content-Disposition', 'inline');
-    res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('X-Accel-Buffering', 'no');
     res.setHeader('Cache-Control', 'public, max-age=3600');
 
