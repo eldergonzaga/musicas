@@ -1,0 +1,27 @@
+{
+  "name": "Drive Player",
+  "short_name": "DrivePlayer",
+  "id": "/?source=pwa",
+  "description": "Seu player de música do Google Drive",
+  "start_url": "/?source=pwa",
+  "display": "standalone",
+  "background_color": "#0a0502",
+  "theme_color": "#ff4e00",
+  "orientation": "portrait",
+  "prefer_related_applications": false,
+  "categories": ["music", "audio", "utilities"],
+  "icons": [
+    {
+      "src": "/icon.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icon.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
