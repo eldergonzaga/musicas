@@ -13,11 +13,24 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="apple-mobile-web-app-title" content="Drive Player">
     <meta name="application-name" content="Drive Player">
-    <script type="module" crossorigin src="/assets/index-DrEY93yY.js"></script>
-    <link rel="stylesheet" crossorigin href="/assets/index-d7Erw9u8.css">
+    <script type="module" crossorigin src="/assets/index-RlCPU_45.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/index-DlqHSwTA.css">
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <div style="position: fixed; inset: 0; background-color: #0a0502; display: flex; flex-direction: column; align-items: center; justify-content: center; z-index: 9999; font-family: system-ui, -apple-system, sans-serif;">
+        <div style="width: 64px; height: 64px; background-color: #ff4e00; border-radius: 16px; display: flex; align-items: center; justify-content: center; margin-bottom: 24px; box-shadow: 0 20px 40px rgba(255, 78, 0, 0.2); animation: pulse 2s infinite ease-in-out;">
+          <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="animation: spin 8s linear infinite;"><circle cx="12" cy="12" r="10"/><path d="M10 9l5 3-5 3v-6z"/></svg>
+        </div>
+        <div style="color: white; font-weight: 600; font-size: 14px; letter-spacing: 0.05em; text-transform: uppercase; opacity: 0.8; margin-bottom: 8px;">Drive Player</div>
+        <div style="color: rgba(255,255,255,0.4); font-size: 12px;">Verificando atualizações aguarde...</div>
+        <style>
+          @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+          @keyframes pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.05); opacity: 0.9; } }
+          body { margin: 0; background: #0a0502; }
+        </style>
+      </div>
+    </div>
     <script>
       if ('serviceWorker' in navigator) {
         window.addEventListener('load', () => {
