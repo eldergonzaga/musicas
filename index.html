@@ -13,7 +13,7 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="apple-mobile-web-app-title" content="Drive Player">
     <meta name="application-name" content="Drive Player">
-    <script type="module" crossorigin src="/assets/index-Bo9e5Bkv.js"></script>
+    <script type="module" crossorigin src="/assets/index-DQUNtM1t.js"></script>
     <link rel="stylesheet" crossorigin href="/assets/index-CrakKIjB.css">
   </head>
   <body>
@@ -43,8 +43,18 @@
       if ('serviceWorker' in navigator) {
         window.addEventListener('load', () => {
           navigator.serviceWorker.register('/sw.js')
-            .then(reg => console.log('SW registered!', reg))
+            .then(reg => {
+              console.log('SW registered!', reg);
+              if (reg.waiting) {
+                reg.waiting.postMessage({ type: 'SKIP_WAITING' });
+                window.location.reload();
+              }
+            })
             .catch(err => console.log('SW error!', err));
+        });
+        
+        navigator.serviceWorker.addEventListener('controllerchange', () => {
+          window.location.reload();
         });
       }
     </script>
