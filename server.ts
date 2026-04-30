@@ -101,21 +101,49 @@ app.post('/api/auth/logout', (req, res) => {
   res.json({ success: true });
 });
 
-const getDriveClient = (token: string) => {
-  const client = new google.auth.OAuth2(
-    process.env.GOOGLE_CLIENT_ID,
-    process.env.GOOGLE_CLIENT_SECRET
-  );
-  client.setCredentials(JSON.parse(token));
-  return google.drive({ version: 'v3', auth: client });
+const getAuthorizedClient = async (req: express.Request, res: express.Response) => {
+  const tokenStr = req.cookies.drive_token;
+  if (!tokenStr) return null;
+
+  try {
+    let tokens = JSON.parse(tokenStr);
+    const client = new google.auth.OAuth2(
+      process.env.GOOGLE_CLIENT_ID,
+      process.env.GOOGLE_CLIENT_SECRET,
+      REDIRECT_URI
+    );
+    client.setCredentials(tokens);
+
+    // Auto-refresh if token is near expiration
+    const isNearlyExpired = tokens.expiry_date && (tokens.expiry_date - 300000) <= Date.now();
+    if (isNearlyExpired && tokens.refresh_token) {
+      try {
+        const { credentials } = await client.refreshAccessToken();
+        tokens = { ...tokens, ...credentials };
+        res.cookie('drive_token', JSON.stringify(tokens), {
+          httpOnly: true, secure: true, sameSite: 'none', maxAge: 30 * 24 * 60 * 60 * 1000
+        });
+        client.setCredentials(tokens);
+      } catch (err: any) {
+        console.error('[Auth] Refresh failed:', err.message);
+        if (err.message?.includes('invalid_grant')) {
+          res.clearCookie('drive_token');
+          return null;
+        }
+      }
+    }
+    return client;
+  } catch (e) {
+    return null;
+  }
 };
 
 app.get('/api/drive/list/:folderId?', async (req, res) => {
-  const token = req.cookies.drive_token;
-  if (!token) return res.status(401).json({ error: 'Not authenticated' });
+  const client = await getAuthorizedClient(req, res);
+  if (!client) return res.status(401).json({ error: 'Sua sessão expirou. Por favor, faça login novamente.' });
 
   const folderId = req.params.folderId || 'root';
-  const drive = getDriveClient(token);
+  const drive = google.drive({ version: 'v3', auth: client });
 
   try {
     const q = folderId === 'sharedWithMe' 
@@ -132,25 +160,28 @@ app.get('/api/drive/list/:folderId?', async (req, res) => {
     });
     res.json(response.data.files || []);
   } catch (error: any) {
+    if (error.message?.includes('invalid_grant')) {
+      res.clearCookie('drive_token');
+      return res.status(401).json({ error: 'Sessão inválida. Por favor, faça login novamente.' });
+    }
     console.error('Drive List Error:', error);
-    // Return the actual error message from Google to help debugging
-    const message = error.errors?.[0]?.message || error.message || 'Unknown Drive error';
+    const message = error.errors?.[0]?.message || error.message || 'Erro deconhecido no Drive';
     res.status(500).json({ error: message });
   }
 });
 
 app.get('/api/drive/cover/:fileId', async (req, res) => {
-  const token = req.cookies.drive_token;
   const fileId = req.params.fileId;
+  const client = await getAuthorizedClient(req, res);
 
-  if (!token) {
-    console.log(`[Cover] No token for ${fileId}, using placeholder`);
+  if (!client) {
+    console.log(`[Cover] No auth for ${fileId}, using placeholder`);
     return res.redirect(`https://picsum.photos/seed/${fileId}/800/800`);
   }
 
   try {
     console.log(`[Cover] Starting extraction for ${fileId}...`);
-    const drive = getDriveClient(token);
+    const drive = google.drive({ version: 'v3', auth: client });
     
     const googleResponse = await drive.files.get(
       { fileId, alt: 'media', supportsAllDrives: true },
@@ -224,15 +255,11 @@ app.get('/sw.js', (req, res) => {
 
 // API Routes
 app.head('/api/drive/stream/:fileId', async (req, res) => {
-  const tokenStr = req.cookies.drive_token;
-  if (!tokenStr) return res.status(401).end();
+  const client = await getAuthorizedClient(req, res);
+  if (!client) return res.status(401).end();
 
   try {
-    const tokens = JSON.parse(tokenStr);
-    const drive = google.drive({ 
-      version: 'v3', 
-      auth: new google.auth.OAuth2(process.env.GOOGLE_CLIENT_ID, process.env.GOOGLE_CLIENT_SECRET).setCredentials(tokens) as any
-    });
+    const drive = google.drive({ version: 'v3', auth: client });
 
     const meta = await drive.files.get({
       fileId: req.params.fileId,
@@ -265,34 +292,18 @@ app.head('/api/drive/stream/:fileId', async (req, res) => {
 });
 
 app.get('/api/drive/stream/:fileId', async (req, res) => {
-  const tokenStr = req.cookies.drive_token;
-  if (!tokenStr) return res.status(401).send('Not authenticated');
+  const client = await getAuthorizedClient(req, res);
+  if (!client) return res.status(401).send('Sua sessão expirou.');
 
   const fileId = req.params.fileId;
   const range = req.headers.range;
   
   try {
-    let tokens = JSON.parse(tokenStr);
-    const oauth2Client = new google.auth.OAuth2(
-      process.env.GOOGLE_CLIENT_ID,
-      process.env.GOOGLE_CLIENT_SECRET,
-      REDIRECT_URI
-    );
-    oauth2Client.setCredentials(tokens);
-
-    // Refresh se necessário
-    if (tokens.expiry_date && (tokens.expiry_date - 300000) <= Date.now() && tokens.refresh_token) {
-      try {
-        const { credentials } = await oauth2Client.refreshAccessToken();
-        tokens = { ...tokens, ...credentials };
-        res.cookie('drive_token', JSON.stringify(tokens), {
-          httpOnly: true, secure: true, sameSite: 'none', maxAge: 30 * 24 * 60 * 60 * 1000
-        });
-      } catch (err) { console.error('[Auth] Refresh failed'); }
-    }
+    const creds = await client.getAccessToken();
+    const accessToken = creds.token;
 
     // Buscar metadados para garantir o Content-Type correto
-    const drive = google.drive({ version: 'v3', auth: oauth2Client });
+    const drive = google.drive({ version: 'v3', auth: client });
     const meta = await drive.files.get({
       fileId,
       fields: 'name, mimeType, size',
@@ -321,7 +332,7 @@ app.get('/api/drive/stream/:fileId', async (req, res) => {
       method: 'get',
       url: downloadUrl,
       headers: {
-        'Authorization': `Bearer ${tokens.access_token}`,
+        'Authorization': `Bearer ${accessToken}`,
         ...(range ? { 'Range': range } : {})
       },
       responseType: 'stream',
